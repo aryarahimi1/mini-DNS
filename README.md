@@ -20,6 +20,10 @@ dns2/
 │   ├── db.py            # SQLAlchemy models, engine, session management
 │   ├── dns_logic.py     # Core DNS logic — validation, conflict checks, CNAME resolution, TTL
 │   └── schemas.py       # Pydantic request/response schemas
+├── tests/
+│   ├── conftest.py      # Test fixtures — async client, in-memory DB
+│   ├── test_endpoints.py # Integration tests for all API endpoints
+│   └── test_validation.py # Unit tests for hostname/IPv4 validation
 ├── pyproject.toml       # Project metadata and dependencies
 └── README.md
 ```
@@ -101,7 +105,7 @@ Creates a new A or CNAME record.
   "hostname": "example.com",
   "type": "A",
   "value": "192.168.1.1",
-  "created_at": "2026-02-06 12:00:00"
+  "createdAt": "2026-02-06 12:00:00"
 }
 ```
 
@@ -223,7 +227,7 @@ Deletes a specific DNS record matching the hostname, type, and value.
     "hostname": "example.com",
     "type": "A",
     "value": "192.168.1.1",
-    "created_at": "2026-02-06 12:00:00"
+    "createdAt": "2026-02-06 12:00:00"
   }
 }
 ```
