@@ -256,9 +256,13 @@ I chose FastAPI for its native async support and automatic OpenAPI documentation
 
 For a mini DNS service, SQLite keeps the setup simple with zero external dependencies (no database server to install). The schema uses proper constraints (`UniqueConstraint`, `CheckConstraint`) and indexes on `hostname` and `(hostname, type)` to ensure data integrity at the database level, not just in application code. This would translate directly to PostgreSQL or MySQL for a production deployment.
 
+### Separating Business Logic from Schemas
+
+Initially, I had DNS constraint checks (CNAME conflicts, duplicate detection, hostname/IP validation) embedded directly in the Pydantic schemas and route handlers. This worked but made the code harder to follow — validation logic was scattered across schemas and endpoints. I refactored all business logic into a dedicated `dns_logic.py` module so that route handlers stay thin (they only call validation functions and return responses) and all DNS rules live in one place. This separation makes the logic easier to test in isolation, easier to reason about, and easier to extend if new record types are added later.
+
 ### DNS Constraint Enforcement
 
-Real DNS has strict rules around CNAME records: a hostname with a CNAME cannot have any other records, and each hostname can have at most one CNAME. These constraints are enforced in the `check_cname_conflict` function at the application level before any record is persisted. This mirrors how authoritative DNS servers reject conflicting zone entries.
+Real DNS has strict rules around CNAME records: a hostname with a CNAME cannot have any other records, and each hostname can have at most one CNAME. These constraints are enforced in the `check_cname_conflict` function in `dns_logic.py` at the application level before any record is persisted. This mirrors how authoritative DNS servers reject conflicting zone entries.
 
 ### CNAME Chain Resolution
 
