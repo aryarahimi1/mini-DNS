@@ -8,11 +8,33 @@ from contextlib import asynccontextmanager
 
 from app.schemas import DNSRecordInput, DNSRecordResponse, ResolveResponse, RecordItem, RecordListResponse, DeleteResponse
 from app.db import DNSRecord, async_session_maker, get_async_session, create_db_and_tables
-from app.dns_logic import validate_hostname, validate_ipv4_address, check_cname_conflict, check_duplicate_record, resolve_cname, filter_expired, cleanup_expired_records
+from app.dns_logic import (
+    validate_hostname,
+    validate_ipv4_address,
+    validate_ipv6_address,
+    validate_mx_value,
+    validate_txt_value,
+    check_cname_conflict,
+    check_duplicate_record,
+    resolve_cname,
+    filter_expired,
+    cleanup_expired_records,
+)
 
 logger = logging.getLogger(__name__)
 
 CLEANUP_INTERVAL_SECONDS = 60
+
+VALID_QUERY_TYPES = {"A", "AAAA", "CNAME", "MX", "TXT", "NS"}
+
+RECORD_VALIDATORS = {
+    "A": (validate_ipv4_address, "Invalid IPv4 address"),
+    "AAAA": (validate_ipv6_address, "Invalid IPv6 address"),
+    "CNAME": (validate_hostname, "Invalid CNAME target hostname"),
+    "MX": (validate_mx_value, "Invalid MX value (expected: '<priority> <hostname>', e.g. '10 mail.example.com')"),
+    "TXT": (validate_txt_value, "Invalid TXT value (must be 1-512 printable characters)"),
+    "NS": (validate_hostname, "Invalid NS target hostname"),
+}
 
 
 async def ttl_cleanup_task():
@@ -42,17 +64,13 @@ async def add_dns_record(record: DNSRecordInput, db: AsyncSession = Depends(get_
     if not validate_hostname(record.hostname):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid hostname")
 
-    if record.type == "A" and not validate_ipv4_address(record.value):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid IPv4 address")
+    validator, error_msg = RECORD_VALIDATORS[record.type]
+    if not validator(record.value):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg)
 
-    if record.type == "CNAME" and not validate_hostname(record.value):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid CNAME target hostname")
-
-    # check if there is a CNAME conflict
     if await check_cname_conflict(db, record.hostname, record.type):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="CNAME conflict")
 
-    # check if no duplicate in the records
     if await check_duplicate_record(db, record.hostname, record.type, record.value):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Duplicate record")
 
@@ -76,7 +94,17 @@ async def add_dns_record(record: DNSRecordInput, db: AsyncSession = Depends(get_
 
 
 @app.get("/api/dns/{hostname}", response_model=ResolveResponse)
-async def resolve_hostname(hostname: str, db: AsyncSession = Depends(get_async_session)):
+async def resolve_hostname(
+    hostname: str,
+    type: str = Query(default="A"),
+    db: AsyncSession = Depends(get_async_session),
+):
+    if type not in VALID_QUERY_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid query type. Must be one of: {', '.join(sorted(VALID_QUERY_TYPES))}",
+        )
+
     result = await db.execute(select(DNSRecord).where(DNSRecord.hostname == hostname))
     records = filter_expired(result.scalars().all())
 
@@ -90,24 +118,21 @@ async def resolve_hostname(hostname: str, db: AsyncSession = Depends(get_async_s
             break
 
     if cname_record:
-        resolved_ips = await resolve_cname(db, cname_record.value)
+        resolved_values = await resolve_cname(db, cname_record.value, type)
 
         return ResolveResponse(
             hostname=hostname,
-            resolvedIps=resolved_ips,
+            values=resolved_values,
             recordType="CNAME",
             pointsTo=cname_record.value,
         )
 
-    ips = []
-    for r in records:
-        if r.type == "A":
-            ips.append(r.value)
+    values = [r.value for r in records if r.type == type]
 
     return ResolveResponse(
         hostname=hostname,
-        resolvedIps=ips,
-        recordType="A",
+        values=values,
+        recordType=type,
     )
 
 @app.get("/api/dns/{hostname}/records", response_model=RecordListResponse)

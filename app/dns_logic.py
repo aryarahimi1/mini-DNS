@@ -1,7 +1,8 @@
+import ipaddress
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
 
@@ -12,7 +13,6 @@ def validate_hostname(hostname: str) -> bool:
     if not hostname or len(hostname) > 253:
         return False
 
-    # remove optional trailing dot
     if hostname.endswith("."):
         hostname = hostname[:-1]
 
@@ -29,7 +29,6 @@ def validate_hostname(hostname: str) -> bool:
 
 
 def validate_ipv4_address(ip: str) -> bool:
-
     parts = ip.split(".")
 
     if len(parts) != 4:
@@ -44,6 +43,40 @@ def validate_ipv4_address(ip: str) -> bool:
         if num < 0 or num > 255:
             return False
 
+    return True
+
+
+def validate_ipv6_address(ip: str) -> bool:
+    try:
+        ipaddress.IPv6Address(ip)
+        return True
+    except ValueError:
+        return False
+
+
+def validate_mx_value(value: str) -> bool:
+    """MX value format: '<priority> <mail-server-hostname>', e.g. '10 mail.example.com'."""
+    parts = value.split(" ", 1)
+    if len(parts) != 2:
+        return False
+
+    priority_str, hostname = parts
+    if not priority_str.isdigit():
+        return False
+
+    priority = int(priority_str)
+    if priority > 65535:
+        return False
+
+    return validate_hostname(hostname)
+
+
+def validate_txt_value(value: str) -> bool:
+    """TXT records: non-empty, max 512 characters, printable ASCII."""
+    if not value or len(value) > 512:
+        return False
+    if not value.isprintable():
+        return False
     return True
 
 
@@ -107,8 +140,13 @@ async def check_duplicate_record(db: AsyncSession, hostname: str, type: str, val
     return False
 
 
-async def resolve_cname(db: AsyncSession, hostname: str, visited: set = None) -> list[str]:
-
+async def resolve_cname(
+    db: AsyncSession,
+    hostname: str,
+    record_type: str = "A",
+    visited: set = None,
+) -> list[str]:
+    """Follow CNAME chains and collect records of `record_type` at the terminal hostname."""
     if visited is None:
         visited = set()
 
@@ -120,7 +158,6 @@ async def resolve_cname(db: AsyncSession, hostname: str, visited: set = None) ->
     result = await db.execute(select(DNSRecord).where(DNSRecord.hostname == hostname))
     records = filter_expired(result.scalars().all())
 
-    # Look for CNAME record
     cname_record = None
     for record in records:
         if record.type == "CNAME":
@@ -129,11 +166,11 @@ async def resolve_cname(db: AsyncSession, hostname: str, visited: set = None) ->
 
     if cname_record:
         target_hostname = cname_record.value
-        return await resolve_cname(db, target_hostname, visited)
+        return await resolve_cname(db, target_hostname, record_type, visited)
 
-    ips = []
+    values = []
     for record in records:
-        if record.type == "A":
-            ips.append(record.value)
+        if record.type == record_type:
+            values.append(record.value)
 
-    return ips
+    return values
