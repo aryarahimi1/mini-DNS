@@ -32,7 +32,7 @@ class DNSRecord(Base):
         UniqueConstraint("hostname", "type", "value", name="uq_hostname_type_value"),
         Index("ix_hostname", "hostname"),
         Index("ix_hostname_type", "hostname", "type"),
-        CheckConstraint("type IN ('A', 'CNAME')", name="ck_type_a_or_cname"),
+        CheckConstraint("type IN ('A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS')", name="ck_record_type"),
     )
 
     id = Column(
